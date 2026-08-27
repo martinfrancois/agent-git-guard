@@ -55,7 +55,7 @@ decide() {
 
     # A rewrite. Allowed only if this branch once contained what is on the remote,
     # which is what --force-if-includes checks and what a bare --force-with-lease
-    # does not: a background fetch satisfies the lease for commits you never had.
+    # does not: any intervening fetch satisfies the lease for commits you never had.
     seen=no
     for sha in $(git reflog show --format=%H "$local_ref" 2>/dev/null); do
       if git merge-base --is-ancestor "$remote_sha" "$sha" 2>/dev/null; then seen=yes; break; fi

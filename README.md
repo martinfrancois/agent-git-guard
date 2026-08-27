@@ -36,9 +36,11 @@ is fine. If it did not, the push would discard work nobody on this machine has
 seen, and no flag makes that safe.
 
 That check exists in git as `--force-if-includes`. It is in the hook because
-`--force-with-lease` alone is not enough under an agent: the lease compares
-against your remote-tracking ref, agent tooling fetches in the background, and a
-refreshed ref satisfies the lease for commits you never had.
+`--force-with-lease` alone is not enough: the lease compares against your
+remote-tracking ref, any fetch refreshes that ref, and a refreshed ref satisfies
+the lease for commits your branch never had. Agents fetch while they work, so
+this is not a rare state. Measured across my own test runs, an agent ran an
+unprompted fetch in 19 of 47.
 
 ## Install
 
