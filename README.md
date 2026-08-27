@@ -7,7 +7,7 @@ yourself.
 It exists because a coding agent of mine pushed a commit deleting every file in
 two repositories to `main`, and one of those pushes triggered a production
 deployment. The full story is in
-[How my coding agent pushed the deletion of every file to main](https://dev.karakun.com/2026/08/27/coding-agent-pushed-deletion-to-main.html).
+[How my coding agent pushed a commit deleting every file to main](https://dev.karakun.com/2026/08/28/coding-agent-pushed-deletion-to-main.html).
 
 ## Why a git hook rather than an agent hook
 
@@ -36,9 +36,11 @@ is fine. If it did not, the push would discard work nobody on this machine has
 seen, and no flag makes that safe.
 
 That check exists in git as `--force-if-includes`. It is in the hook because
-`--force-with-lease` alone is not enough under an agent: the lease compares
-against your remote-tracking ref, agent tooling fetches in the background, and a
-refreshed ref satisfies the lease for commits you never had.
+`--force-with-lease` alone is not enough: the lease compares against your
+remote-tracking ref, any fetch refreshes that ref, and a refreshed ref satisfies
+the lease for commits your branch never had. Agents fetch while they work, so
+this is not a rare state. Measured across my own test runs, an agent ran an
+unprompted fetch in 19 of 47.
 
 ## Install
 
@@ -105,7 +107,7 @@ sensibly when it hits one. Codex reads `AGENTS.md`, Claude Code reads
 - Land changes on the default branch through a pull request, and ask before merging unless a standing rule allows self-merge.
 - A rejected push is a stop signal: fetch, look at the remote, tell me. Force-push only when I approve, with `--force-with-lease --force-if-includes`.
 - If a push already did damage, tell me before you repair it. Repair by adding a commit.
-- A `pre-push` hook refuses these pushes, including ones a script makes. When it fires, stop and tell me. `--no-verify`, `AGENT_GUARD_APPROVE`, and clearing the environment marker it uses to tell an agent from a human, are my overrides, never yours.
+- A `pre-push` hook refuses these pushes, including ones a script makes. When it fires, stop and tell me. `--no-verify`, `AGENT_GUARD_APPROVE`, and clearing the environment marker it uses to tell an agent from a human are my overrides, never yours.
 ```
 
 ## Verify it
@@ -114,7 +116,7 @@ sensibly when it hits one. Codex reads `AGENTS.md`, Claude Code reads
 ./test/run-tests.sh
 ```
 
-20 checks. It builds throwaway repositories in a temp directory, runs real
+22 checks. It builds throwaway repositories in a temp directory, runs real
 pushes, and cleans up after itself. Nothing leaves your machine.
 
 ## Limits worth knowing before you rely on it
