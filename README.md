@@ -105,7 +105,7 @@ sensibly when it hits one. Codex reads `AGENTS.md`, Claude Code reads
 - Land changes on the default branch through a pull request, and ask before merging unless a standing rule allows self-merge.
 - A rejected push is a stop signal: fetch, look at the remote, tell me. Force-push only when I approve, with `--force-with-lease --force-if-includes`.
 - If a push already did damage, tell me before you repair it. Repair by adding a commit.
-- A `pre-push` hook refuses these pushes, including ones a script makes. When it fires, stop and tell me. `--no-verify`, and clearing the environment marker it uses to tell an agent from a human, are my overrides, never yours.
+- A `pre-push` hook refuses these pushes, including ones a script makes. When it fires, stop and tell me. `--no-verify`, `AGENT_GUARD_APPROVE`, and clearing the environment marker it uses to tell an agent from a human, are my overrides, never yours.
 ```
 
 ## Verify it
