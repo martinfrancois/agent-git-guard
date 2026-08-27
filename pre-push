@@ -21,7 +21,7 @@ chain() {
 # wrote. Verified: CLAUDECODE (Claude Code), CODEX_THREAD_ID (Codex). For another
 # tool, run `env | sort` inside an agent session and add its marker here.
 # AGENT_GUARD=1 forces the guard on for anything else.
-if [ -z "$CLAUDECODE" ] && [ -z "$CODEX_THREAD_ID" ] && [ -z "$AGENT_GUARD" ]; then
+if [ -z "$CLAUDECODE" ] && [ -z "$CODEX_THREAD_ID" ] && [ -z "$CODEX_SESSION_ID" ] && [ -z "$AGENT_GUARD" ]; then
   chain "$@"
 fi
 
@@ -55,7 +55,7 @@ decide() {
 
     # A rewrite. Allowed only if this branch once contained what is on the remote,
     # which is what --force-if-includes checks and what a bare --force-with-lease
-    # does not: a background fetch satisfies the lease for commits you never had.
+    # does not: any intervening fetch satisfies the lease for commits you never had.
     seen=no
     for sha in $(git reflog show --format=%H "$local_ref" 2>/dev/null); do
       if git merge-base --is-ancestor "$remote_sha" "$sha" 2>/dev/null; then seen=yes; break; fi
