@@ -21,7 +21,7 @@ chain() {
 # wrote. Verified: CLAUDECODE (Claude Code), CODEX_THREAD_ID (Codex). For another
 # tool, run `env | sort` inside an agent session and add its marker here.
 # AGENT_GUARD=1 forces the guard on for anything else.
-if [ -z "$CLAUDECODE" ] && [ -z "$CODEX_THREAD_ID" ] && [ -z "$AGENT_GUARD" ]; then
+if [ -z "$CLAUDECODE" ] && [ -z "$CODEX_THREAD_ID" ] && [ -z "$CODEX_SESSION_ID" ] && [ -z "$AGENT_GUARD" ]; then
   chain "$@"
 fi
 
