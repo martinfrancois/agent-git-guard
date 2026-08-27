@@ -59,6 +59,14 @@ echo b > b.txt; git add -A; git commit -qm change
 agent git push -q origin main 2>/dev/null; check "$?" 1 "agent pushing to main is refused"
 human git push -q origin main 2>/dev/null; check "$?" 0 "human pushing to main is allowed"
 
+mk approve1
+echo b > b.txt; git add -A; git commit -qm change
+agent env AGENT_GUARD_APPROVE=1 git push -q origin main 2>/dev/null
+check "$?" 0 "an explicitly approved push to main is allowed"
+echo c > c.txt; git add -A; git commit -qm "another change"
+agent env AGENT_GUARD_APPROVE= git push -q origin main 2>/dev/null
+check "$?" 1 "an empty approval value is not an approval"
+
 mk branch1
 git checkout -qb feature; echo b > b.txt; git add -A; git commit -qm work
 agent git push -q origin feature 2>/dev/null; check "$?" 0 "agent pushing a new branch is allowed"

@@ -131,6 +131,12 @@ which is the difference this hook is built on, but it is not a wall.
 **`--no-verify` skips it.** That is deliberate. It is your override as a human,
 and it is worth telling your agent in writing that the flag is not theirs.
 
+**`AGENT_GUARD_APPROVE=1` on a single push skips it too.** That one is for the times
+you tell the agent to go ahead anyway. Anything the agent can type is a soft
+limit rather than a wall: this exists so an approved push is deliberate and
+visible in the transcript, not so the guard cannot be bypassed. It prints a line
+to stderr when it is used.
+
 **A global `core.hooksPath` makes git ignore each repository's own
 `.git/hooks`.** The hook hands control back to the repository's hook when there
 is one, so nothing you installed yourself stops working. Keep that part if you

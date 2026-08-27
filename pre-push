@@ -25,6 +25,14 @@ if [ -z "$CLAUDECODE" ] && [ -z "$CODEX_THREAD_ID" ] && [ -z "$AGENT_GUARD" ]; t
   chain "$@"
 fi
 
+# Explicit, per-push approval from the user. Anything the agent can set is a soft
+# limit, not a wall: this exists so an approved push is visible and deliberate,
+# not so the guard cannot be bypassed. --no-verify remains the human's override.
+if [ -n "${AGENT_GUARD_APPROVE:-}" ]; then
+  echo "pre-push: guard bypassed with AGENT_GUARD_APPROVE" >&2
+  chain "$@"
+fi
+
 case "$remote_url" in
   file://*|/*|./*|../*) chain "$@" ;;
 esac
