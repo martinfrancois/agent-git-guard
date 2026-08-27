@@ -1,0 +1,67 @@
+#!/bin/sh
+# Refuse pushes to the default branch, and rewrites that would discard commits
+# this branch never contained. Portable POSIX sh: Linux, macOS, Git for Windows.
+# Local file:// and path remotes are exempt: no CI, no deploy, no other clones.
+# Human escape hatch: git push --no-verify
+remote_url="$2"
+input=$(cat)
+local_hook="$(git rev-parse --absolute-git-dir)/hooks/pre-push"
+
+chain() {
+  if [ -x "$local_hook" ]; then
+    printf '%s\n' "$input" | "$local_hook" "$@"
+    exit $?
+  fi
+  exit 0
+}
+
+# Agents only. A human pushing from their own terminal is not affected by any of
+# this. These markers are set by the agent runtime and inherited by everything it
+# spawns, so they are present even when the push comes from a script the agent
+# wrote. Verified: CLAUDECODE (Claude Code), CODEX_THREAD_ID (Codex). For another
+# tool, run `env | sort` inside an agent session and add its marker here.
+# AGENT_GUARD=1 forces the guard on for anything else.
+if [ -z "$CLAUDECODE" ] && [ -z "$CODEX_THREAD_ID" ] && [ -z "$AGENT_GUARD" ]; then
+  chain "$@"
+fi
+
+case "$remote_url" in
+  file://*|/*|./*|../*) chain "$@" ;;
+esac
+
+Z=0000000000000000000000000000000000000000
+
+decide() {
+  while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -z "$local_ref" ] && continue
+    [ "$local_sha" = "$Z" ] && continue
+    case "$remote_ref" in
+      refs/heads/main|refs/heads/master)
+        echo "pre-push: refused push to ${remote_ref#refs/heads/} on $remote_url" >&2
+        echo "  Push a branch and open a pull request. This applies when the build is" >&2
+        echo "  broken and the fix is urgent. --no-verify is the human's override." >&2
+        exit 1 ;;
+    esac
+    [ "$remote_sha" = "$Z" ] && continue
+    git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null && continue
+
+    # A rewrite. Allowed only if this branch once contained what is on the remote,
+    # which is what --force-if-includes checks and what a bare --force-with-lease
+    # does not: a background fetch satisfies the lease for commits you never had.
+    seen=no
+    for sha in $(git reflog show --format=%H "$local_ref" 2>/dev/null); do
+      if git merge-base --is-ancestor "$remote_sha" "$sha" 2>/dev/null; then seen=yes; break; fi
+    done
+    if [ "$seen" = no ]; then
+      echo "pre-push: refused rewrite of ${remote_ref#refs/heads/} on $remote_url" >&2
+      echo "  The remote has commits this branch never contained, so this push would" >&2
+      echo "  discard someone else's work. Fetch and look at what is there first." >&2
+      echo "  --no-verify is the human's override." >&2
+      exit 1
+    fi
+  done
+  exit 0
+}
+
+printf '%s\n' "$input" | decide || exit 1
+chain "$@"
