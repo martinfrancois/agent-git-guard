@@ -7,7 +7,7 @@ yourself.
 It exists because a coding agent of mine pushed a commit deleting every file in
 two repositories to `main`, and one of those pushes triggered a production
 deployment. The full story is in
-[How my coding agent pushed the deletion of every file to main](https://dev.karakun.com/2026/08/27/coding-agent-pushed-deletion-to-main.html).
+[How my coding agent pushed a commit deleting every file to main](https://dev.karakun.com/2026/08/28/coding-agent-pushed-deletion-to-main.html).
 
 ## Why a git hook rather than an agent hook
 
