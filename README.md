@@ -116,7 +116,7 @@ sensibly when it hits one. Codex reads `AGENTS.md`, Claude Code reads
 ./test/run-tests.sh
 ```
 
-20 checks. It builds throwaway repositories in a temp directory, runs real
+22 checks. It builds throwaway repositories in a temp directory, runs real
 pushes, and cleans up after itself. Nothing leaves your machine.
 
 ## Limits worth knowing before you rely on it
