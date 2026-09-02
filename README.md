@@ -59,6 +59,11 @@ chmod +x ~/.git-hooks/pre-push
 git config --global core.hooksPath ~/.git-hooks
 ```
 
+The hook is global on purpose. An agent clones repositories of its own while it
+works, and a hook that lives in one repository's `.git/hooks` is not in a clone
+made five minutes later. A global `core.hooksPath` is in every clone on the
+machine.
+
 POSIX `sh`, no bashisms, no `/proc`. Linux, macOS, and Git for Windows from Git
 Bash.
 
