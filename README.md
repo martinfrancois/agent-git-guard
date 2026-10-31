@@ -1,48 +1,40 @@
 # agent-git-guard
 
-A `pre-push` hook that stops a coding agent pushing to `main`, or discarding
-commits it has never seen, and leaves you alone when you push the same things
-yourself.
+A Git `pre-push` hook that blocks agent updates to the default branch and rejects
+rewrites when the local branch never incorporated the remote tip. It allows
+routine PR branch rewrites after the agent integrates incoming work. Human pushes
+are unaffected.
 
-It exists because a coding agent of mine pushed a commit deleting every file in
-two repositories to `main`, and one of those pushes triggered a production
-deployment. The full story is in
+It exists because a coding agent pushed commits deleting every file in two
+repositories to `main`, triggering a production deployment. The incident is in
 [How my coding agent pushed a commit deleting every file to main](https://dev.karakun.com/2026/08/28/coding-agent-pushed-deletion-to-main.html).
 
-## Why a git hook rather than an agent hook
+## What the hook checks
 
-Claude Code and Codex both have hooks that can refuse a command before it runs.
-They are worth having, but they only see what the agent runs as a command, and
-they see it as text. The push that caused my incident came from inside a script
-the agent wrote. No agent hook can see that one. Git sees every push, whoever or
-whatever started it.
-
-## What it does
-
-| the agent pushes | result |
+| Agent action | Result |
 | --- | --- |
-| a branch, or a new branch | allowed |
-| an amend of its own commits, force-pushed | allowed |
-| a rewrite dropping commits the branch never had | refused |
-| anything to `main` or `master` | refused |
-| `main` from inside a script it wrote | refused |
-| anything to a `file://` or local path remote | allowed |
-| and when it is you pushing, not an agent | allowed |
+| Create or fast-forward a task branch | Allowed |
+| Amend, squash, or rebase a branch that incorporated the remote tip | Allowed in a full clone |
+| Rewrite without incorporating the current remote tip | Rejected; integrate, review, and retry |
+| Rewrite from a shallow clone | Rejected; obtain full history first |
+| Update or delete `main`, `master`, or the remote's actual default branch | Rejected |
+| Update a ref listed in `agentGitGuard.protectedRef` | Rejected |
+| Push from a script the agent started | Same checks |
+| Push to a local path or `file://` remote | Exempt |
+| Push without an agent marker | Unchanged |
 
-The rewrite rule does not look at which force flag was used. It asks whether the
-branch ever contained the commit that is on the remote, and answers from the
-reflog. If it did, the rewrite is the agent's own work and even a plain `--force`
-is fine. If it did not, the push would discard work nobody on this machine has
-seen, and no flag makes that safe.
+The hook reads the default branch from the actual push destination. A failed
+lookup stops the push. This adds one `ls-remote` call per nonempty hosted push;
+remote-tracking HEAD alone would miss a default-branch change. An empty HEAD
+result triggers a second lookup to distinguish an empty repository from a
+nonempty repository with an unresolved default. The latter is rejected until
+the remote HEAD is repaired. Empty repositories still permit first task branches.
 
-That check exists in git as `--force-if-includes`. It is in the hook because
-`--force-with-lease` alone is not enough: the lease compares against your
-remote-tracking ref, any fetch refreshes that ref, and a refreshed ref satisfies
-the lease for commits your branch never had. Agents fetch while they work, so
-this is not a rare state. Measured across my own test runs, an agent ran an
-unprompted fetch in 19 of 47.
+The hook recognizes `CLAUDECODE`, `CODEX_THREAD_ID`, and `CODEX_SESSION_ID`.
+Set `AGENT_GUARD=1` when invoking another agent. Detection uses inherited
+process environment, so it covers subprocesses without parsing shell commands.
 
-## Install
+## Install without replacing repository hooks
 
 ```sh
 git clone https://github.com/martinfrancois/agent-git-guard.git
@@ -50,104 +42,127 @@ cd agent-git-guard
 ./install.sh
 ```
 
-Or without the script, which is all it does:
+The installer uses Git's configured hooks. It registers `agent-git-guard` for
+`pre-push` and leaves `core.hooksPath` unchanged. Husky and native repository hooks
+continue to run, with their own copy of stdin. No per-repository edits are needed.
+Git runs the other hooks even when the guard rejects a push.
+
+The installer probes configured-hook support before changing anything. If your
+Git lacks it, upgrade Git and rerun the installer. Git 2.56.0 is tested here; the
+probe is authoritative for other builds. The hook itself is POSIX shell, with no
+Linux `/proc` dependency. Tests on Linux do not establish macOS or Windows support.
+
+Verify registration from a repository:
 
 ```sh
-mkdir -p ~/.git-hooks
-cp pre-push ~/.git-hooks/pre-push
-chmod +x ~/.git-hooks/pre-push
-git config --global core.hooksPath ~/.git-hooks
+git hook list pre-push
 ```
 
-The hook is global on purpose. An agent clones repositories of its own while it
-works, and a hook that lives in one repository's `.git/hooks` is not in a clone
-made five minutes later. A global `core.hooksPath` is in every clone on the
-machine.
+The default installation directory is `~/.local/share/agent-git-guard`.
+`AGENT_GUARD_INSTALL_DIR` selects a different directory at installation time.
+Reinstalling updates the hook without adding duplicate registrations.
 
-POSIX `sh`, no bashisms, no `/proc`. Linux, macOS, and Git for Windows from Git
-Bash.
+### Migrating the old global hook path
 
-### If you use husky
-
-Husky sets `core.hooksPath` in the repository, and repository config beats global
-config, so in a husky repo the global hook never runs at all. Those repositories
-need the guard inside husky's own hook. Once per repository, from the repository
-root:
+The old installer set `core.hooksPath=~/.git-hooks`. Inspect that directory for
+custom hooks before migrating:
 
 ```sh
-{ printf '#!/bin/sh\n"$HOME"/.git-hooks/pre-push "$@" || exit 1\n'
-  if [ -f .husky/pre-push ]; then tail -n +2 .husky/pre-push; fi
-} > .husky/pre-push.tmp && mv .husky/pre-push.tmp .husky/pre-push && chmod +x .husky/pre-push
+./install.sh --migrate-legacy
 ```
 
-The guard line has to come first. Git feeds the pushed refs to the hook on stdin,
-and a hook that reads stdin consumes them, so a guard placed after one of those
-gets an empty list and allows every push. There is a test for exactly that.
+Migration removes that global hook-path setting and restores Git's native
+repository-hook lookup. It keeps the old files, registers the new guard, and
+leaves repository-local hook paths unchanged. Move any custom global hooks you
+want to retain into separate configured-hook registrations first. An unrelated
+global hook path is preserved by the normal installer.
 
-## How it tells an agent from a human
+Old manual installations remain supported when the script runs without
+`--config-hook`; that mode chains to the repository's common Git hooks directory.
+It retains the old limitations: a repository hook path overrides a global hook
+path, and an earlier stdin reader starves a manually chained guard. Prefer the
+configured installation.
 
-Coding agents mark the environment of every command they run, and the environment
-is inherited, so the marker is still present when a script the agent wrote pushes
-on its own. The hook enforces when it sees one and does nothing when it does not.
+### Additional protected branches
 
-| tool | marker |
-| --- | --- |
-| Claude Code | `CLAUDECODE` |
-| Codex | `CODEX_THREAD_ID` |
-| anything else | set `AGENT_GUARD=1` |
+List full refs for integration or release branches whose updates need approval:
 
-For another tool, run `env | sort` inside an agent session, find a variable that
-is not in your own shell, and add it to the check near the top of the hook.
+```sh
+git config --add agentGitGuard.protectedRef refs/heads/develop
+git config --add agentGitGuard.protectedRef refs/heads/release/1.x
+```
 
-## The instruction block that goes with it
+This is local configuration. The hook does not query GitHub or another host's
+branch-protection API. Enforce repository-wide rules on the remote too.
 
-The hook is the layer that holds. This is the layer that makes the agent behave
-sensibly when it hits one. Codex reads `AGENTS.md`, Claude Code reads
-`CLAUDE.md`.
+## Agent instructions
+
+A hook cannot decide whether the rewritten code preserves the intended behavior.
+Use instructions such as these when routine PR rewrites have your standing approval:
 
 ```md
-## Git
-
-- Read `git diff --cached --stat` before every commit and account for every file it lists. A file or a deletion you did not intend: stop and tell me.
-- Land changes on the default branch through a pull request, and ask before merging unless a standing rule allows self-merge.
-- A rejected push is a stop signal: fetch, look at the remote, tell me. Force-push only when I approve, with `--force-with-lease --force-if-includes`.
-- If a push already did damage, tell me before you repair it. Repair by adding a commit.
-- A `pre-push` hook refuses these pushes, including ones a script makes. When it fires, stop and tell me. `--no-verify`, `AGENT_GUARD_APPROVE`, and clearing the environment marker it uses to tell an agent from a human are my overrides, never yours.
+Routine task-branch pushes and clean-history rewrites have standing approval.
+Preserve incoming remote work. Fetch, incorporate, review, and retry without asking
+merely because the remote advanced. Keep one commit per logical change.
+Use full history and an explicit lease pinned to the remote tip incorporated
+before the rewrite. Review the resulting diff and run the relevant checks.
+A rejection means satisfy the failed check, never weaken it.
+Updating the default or another protected branch still needs specific approval.
+Ask when competing changes leave the intended result unclear. Keep hooks and
+agent markers enabled; standing rewrite approval does not authorize bypasses.
 ```
 
-## Verify it
+A more detailed procedure is available in the companion `git-safety` skill.
+The skill and this hook have different limits; compare them against the tasks
+that matter in your workflow.
+
+## Limits
+
+The reflog check proves that the branch previously contained the remote tip.
+It does not prove that the final tree preserves that work. An agent that first
+incorporates a contributor's commit and later discards it passes this check.
+An ordinary fast-forward containing accidental file deletions also passes.
+Content review and tests remain necessary. A content-preserving rewrite is also
+rejected when the named source branch's reflog does not establish incorporation
+of the remote tip. Replaying the correct patches on a new branch does not satisfy
+that prerequisite by itself.
+
+A push should use `--force-with-lease=<full-ref>:<recorded-oid>`. A background
+fetch does not refresh that explicit lease. Git's `--force-if-includes` adds no
+check to an explicit-ID lease. This hook independently checks the local branch's
+reflog. It does not inspect push flags, so plain `--force` still passes when the
+reflog condition holds. The instruction layer prohibits that substitution.
+
+Git invokes pre-push hooks during `git push --dry-run` too. The hook does not
+receive that flag, so it rejects dry runs targeting protected refs. Inspecting
+push configuration directly avoids this diagnostic limitation. Treat rejection
+counts as failed prerequisites, not a count of prevented data loss.
+
+Local remotes are exempt to support disposable tests. This is a boundary of the
+hook, not permission to overwrite a shared repository accessed by a local path.
+
+The guard is a convention, not a sandbox. `--no-verify`, disabling configured
+hooks, or clearing agent markers bypasses it. `AGENT_GUARD_APPROVE=1` remains an
+explicit per-push override and prints a diagnostic. Agents need the user's
+specific permission to use these overrides. A repository can override configured
+hook settings, so remote branch protection is the enforcement layer across machines.
+
+## Measurements
+
+The [validation report](docs/validation-2026-10-31.md) compares the old and new
+hooks, records compatibility checks, and states what remains unprotected.
+
+## Tests
 
 ```sh
 ./test/run-tests.sh
+python3 test/config-hooks.py
 ```
 
-22 checks. It builds throwaway repositories in a temp directory, runs real
-pushes, and cleans up after itself. Nothing leaves your machine.
-
-## Limits worth knowing before you rely on it
-
-**It protects this machine, not your repository.** Another laptop, a CI runner, a
-colleague, none of them have it. Branch protection on the remote is the layer
-that protects the repository. If you already work through pull requests, turning
-it on costs nothing and covers every machine at once.
-
-**The marker is a convention, not a sandbox.** An agent that decides to unset
-`CLAUDECODE` gets through. That is a deliberate act rather than a judgment call,
-which is the difference this hook is built on, but it is not a wall.
-
-**`--no-verify` skips it.** That is deliberate. It is your override as a human,
-and it is worth telling your agent in writing that the flag is not theirs.
-
-**`AGENT_GUARD_APPROVE=1` on a single push skips it too.** That one is for the times
-you tell the agent to go ahead anyway. Anything the agent can type is a soft
-limit rather than a wall: this exists so an approved push is deliberate and
-visible in the transcript, not so the guard cannot be bypassed. It prints a line
-to stderr when it is used.
-
-**A global `core.hooksPath` makes git ignore each repository's own
-`.git/hooks`.** The hook hands control back to the repository's hook when there
-is one, so nothing you installed yourself stops working. Keep that part if you
-edit the file.
+Both use disposable local repositories. The second suite tests configured-hook
+installation, stdin readers, Husky-style paths, worktrees, different object-ID
+formats, and shallow-history rejection. Its hosted-looking remotes use a local
+transport helper; no push reaches a hosted service.
 
 ## License
 
