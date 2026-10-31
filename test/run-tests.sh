@@ -9,28 +9,32 @@
 # by the unit tests, which call the hook directly with the arguments git passes.
 set -u
 HOOK="$(cd "$(dirname "$0")/.." && pwd)/pre-push"
-TMP=$(mktemp -d)
+TMP=$(mktemp -d "${TMPDIR:-/var/tmp}/agent-git-guard.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 PASS=0; FAIL=0
 export GIT_AUTHOR_NAME=guard-test GIT_AUTHOR_EMAIL=test@example.invalid
 export GIT_COMMITTER_NAME=guard-test GIT_COMMITTER_EMAIL=test@example.invalid
+export GIT_CONFIG_GLOBAL="$TMP/gitconfig" GIT_CONFIG_NOSYSTEM=1
+: > "$GIT_CONFIG_GLOBAL"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=init.defaultBranch GIT_CONFIG_VALUE_0=main
 
 ok()    { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad()   { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
-check() { [ "$1" = "$2" ] && ok "$3" || bad "$3 (got $1, want $2)"; }
+check() { if [ "$1" = "$2" ]; then ok "$3"; else bad "$3 (got $1, want $2)"; fi; }
 
 STRICT="$TMP/strict-pre-push"
 sed 's|  file://\*|  __no_match__*|' "$HOOK" > "$STRICT"; chmod +x "$STRICT"
 Z=0000000000000000000000000000000000000000
 agent() { AGENT_GUARD=1 "$@"; }
-human() { env -u CLAUDECODE -u CODEX_THREAD_ID -u AGENT_GUARD "$@"; }
+human() { env -u CLAUDECODE -u CODEX_THREAD_ID -u CODEX_SESSION_ID -u AGENT_GUARD "$@"; }
 
 echo "unit: which remotes and refs the guard acts on"
-mkdir -p "$TMP/u"; cd "$TMP/u"; git init -q -b main .
+mkdir -p "$TMP/u"; cd "$TMP/u" || exit 1; git init -q -b main .
 echo a > a.txt; git add -A; git commit -qm one
 echo b > b.txt; git add -A; git commit -qm two
 OLD=$(git rev-parse HEAD~1); NEW=$(git rev-parse HEAD)
+git config --add "url.file://$TMP/u/.git.insteadOf" https://example.invalid/x.git
+git config --add "url.file://$TMP/u/.git.insteadOf" user@example.invalid:x/y.git
 unit() { printf '%s\n' "$3" | agent "$HOOK" origin "$2" >/dev/null 2>&1; check "$?" "$1" "$4"; }
 unit 1 "https://example.invalid/x.git" "refs/heads/main $NEW refs/heads/main $OLD"       "main on a hosted remote is refused"
 unit 1 "user@example.invalid:x/y.git"  "refs/heads/master $NEW refs/heads/master $OLD"   "master on an ssh remote is refused"
@@ -48,7 +52,7 @@ echo "end to end: real pushes"
 mk() {
   git init -q --bare -b main "$TMP/$1.git"
   git clone -q "file://$TMP/$1.git" "$TMP/$1" 2>/dev/null
-  cd "$TMP/$1"; mkdir -p "$TMP/hooks-$1"; cp "$STRICT" "$TMP/hooks-$1/pre-push"
+  cd "$TMP/$1" || exit 1; mkdir -p "$TMP/hooks-$1"; cp "$STRICT" "$TMP/hooks-$1/pre-push"
   git config core.hooksPath "$TMP/hooks-$1"
   echo a > a.txt; git add -A; git commit -qm base
   git push -q --no-verify origin main
@@ -84,7 +88,7 @@ echo y > "$TMP/other/y.txt"; git -C "$TMP/other" add -A
 git -C "$TMP/other" commit -qm "someone else"
 git -C "$TMP/other" push -q --no-verify origin feature
 THEIRS=$(git -C "$TMP/other" rev-parse feature)
-cd "$TMP/rewrite1"; git fetch -q origin
+cd "$TMP/rewrite1" || exit 1; git fetch -q origin
 echo z > z.txt; git add -A; git commit -q --amend -m "mine, rewritten"
 agent git push -q --force-with-lease origin feature 2>/dev/null
 check "$?" 1 "a rewrite dropping commits the branch never had is refused"

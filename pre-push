@@ -1,74 +1,105 @@
 #!/bin/sh
-# Refuse pushes to the default branch, and rewrites that would discard commits
-# this branch never contained. Portable POSIX sh: Linux, macOS, Git for Windows.
-# Local file:// and path remotes are exempt: no CI, no deploy, no other clones.
-# Human escape hatch: git push --no-verify
-remote_url="$2"
+# Guard agent pushes while leaving human pushes and repository hooks intact.
+# POSIX sh. Configured hooks receive their own stdin and need no manual chaining.
+mode=legacy
+if [ "${1:-}" = --config-hook ]; then
+  mode=config
+  shift
+fi
+remote_url=${2:-}
 input=$(cat)
-local_hook="$(git rev-parse --absolute-git-dir)/hooks/pre-push"
+local_hook="$(git rev-parse --git-common-dir)/hooks/pre-push"
 
 chain() {
-  if [ -x "$local_hook" ]; then
+  if [ "$mode" = legacy ] && [ -x "$local_hook" ]; then
     printf '%s\n' "$input" | "$local_hook" "$@"
     exit $?
   fi
   exit 0
 }
 
-# Agents only. A human pushing from their own terminal is not affected by any of
-# this. These markers are set by the agent runtime and inherited by everything it
-# spawns, so they are present even when the push comes from a script the agent
-# wrote. Verified: CLAUDECODE (Claude Code), CODEX_THREAD_ID (Codex). For another
-# tool, run `env | sort` inside an agent session and add its marker here.
-# AGENT_GUARD=1 forces the guard on for anything else.
-if [ -z "$CLAUDECODE" ] && [ -z "$CODEX_THREAD_ID" ] && [ -z "$CODEX_SESSION_ID" ] && [ -z "$AGENT_GUARD" ]; then
+if [ -z "${CLAUDECODE:-}" ] && [ -z "${CODEX_THREAD_ID:-}" ] &&
+   [ -z "${CODEX_SESSION_ID:-}" ] && [ -z "${AGENT_GUARD:-}" ]; then
   chain "$@"
 fi
-
-# Explicit, per-push approval from the user. Anything the agent can set is a soft
-# limit, not a wall: this exists so an approved push is visible and deliberate,
-# not so the guard cannot be bypassed. --no-verify remains the human's override.
 if [ -n "${AGENT_GUARD_APPROVE:-}" ]; then
   echo "pre-push: guard bypassed with AGENT_GUARD_APPROVE" >&2
   chain "$@"
 fi
 
+# Preserve the fixture exemption. A local transport does not imply permission in
+# the skill; this hook exemption is only a documented installation boundary.
 case "$remote_url" in
   file://*|/*|./*|../*) chain "$@" ;;
 esac
+[ -z "$input" ] && chain "$@"
 
-Z=0000000000000000000000000000000000000000
+refuse() {
+  printf 'cannot push ref "%s": %s\n' "$1" "$2" >&2
+  exit 1
+}
+
+# Read HEAD from the actual push destination, including when fetch and push URLs
+# differ. Remote-tracking HEAD alone can be stale after a default-branch change.
+head_info=$(git ls-remote --symref "$remote_url" HEAD 2>/dev/null) ||
+  refuse HEAD 'cannot establish the remote default branch; check connectivity before retrying'
+default_ref=$(printf '%s\n' "$head_info" | sed -n 's/^ref: \(refs\/heads\/[^[:space:]]*\)[[:space:]]HEAD$/\1/p')
+# A dangling HEAD also returns no output. Only exempt a remote without refs.
+if [ -z "$head_info" ]; then
+  remote_refs=$(git ls-remote --refs "$remote_url" 2>/dev/null) ||
+    refuse HEAD 'cannot establish whether the remote is empty; check connectivity before retrying'
+  if [ -n "$remote_refs" ]; then
+    refuse HEAD 'remote has refs but no resolvable default branch; repair remote HEAD before retrying'
+  fi
+fi
+# Other missing or ambiguous symrefs fail closed.
+if [ -n "$head_info" ] && [ -z "$default_ref" ]; then
+  refuse HEAD 'remote HEAD is not a symbolic branch; identify the protected target before retrying'
+fi
+shallow=$(git rev-parse --is-shallow-repository) || exit 1
+
+is_zero() {
+  case "$1" in ''|*[!0]*) return 1 ;; *) return 0 ;; esac
+}
 
 decide() {
   while read -r local_ref local_sha remote_ref remote_sha; do
     [ -z "$local_ref" ] && continue
-    [ "$local_sha" = "$Z" ] && continue
     case "$remote_ref" in
       refs/heads/main|refs/heads/master)
-        echo "pre-push: refused push to ${remote_ref#refs/heads/} on $remote_url" >&2
-        echo "  Push a branch and open a pull request. This applies when the build is" >&2
-        echo "  broken and the fix is urgent. --no-verify is the human's override." >&2
-        exit 1 ;;
+        refuse "$remote_ref" 'use a task branch and pull request; direct updates need specific approval' ;;
     esac
-    [ "$remote_sha" = "$Z" ] && continue
+    if [ -n "$default_ref" ] && [ "$remote_ref" = "$default_ref" ]; then
+      refuse "$remote_ref" 'use a task branch and pull request; default-branch updates need specific approval'
+    fi
+    # Repository owners can name additional integration/release refs without
+    # hard-coding a naming convention into a global hook.
+    if git config --get-all agentGitGuard.protectedRef 2>/dev/null | grep -Fx "$remote_ref" >/dev/null; then
+      refuse "$remote_ref" 'this ref is configured as protected; obtain specific approval'
+    fi
+    is_zero "$local_sha" && continue
+    is_zero "$remote_sha" && continue
     git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null && continue
 
-    # A rewrite. Allowed only if this branch once contained what is on the remote,
-    # which is what --force-if-includes checks and what a bare --force-with-lease
-    # does not: any intervening fetch satisfies the lease for commits you never had.
+    if [ "$shallow" != false ]; then
+      refuse "$remote_ref" 'fetch full history before rewriting, then inspect and retry with a pinned lease'
+    fi
+    case "$local_ref" in
+      refs/heads/*) ;;
+      *) refuse "$remote_ref" 'push from a named local branch so its rewrite history can be checked' ;;
+    esac
+
     seen=no
     for sha in $(git reflog show --format=%H "$local_ref" 2>/dev/null); do
-      if git merge-base --is-ancestor "$remote_sha" "$sha" 2>/dev/null; then seen=yes; break; fi
+      if git merge-base --is-ancestor "$remote_sha" "$sha" 2>/dev/null; then
+        seen=yes
+        break
+      fi
     done
     if [ "$seen" = no ]; then
-      echo "pre-push: refused rewrite of ${remote_ref#refs/heads/} on $remote_url" >&2
-      echo "  The remote has commits this branch never contained, so this push would" >&2
-      echo "  discard someone else's work. Fetch and look at what is there first." >&2
-      echo "  --no-verify is the human's override." >&2
-      exit 1
+      refuse "$remote_ref" 'fetch and incorporate the remote work, review the result, then retry with a pinned lease; routine PR updates need no new approval'
     fi
   done
-  exit 0
 }
 
 printf '%s\n' "$input" | decide || exit 1
