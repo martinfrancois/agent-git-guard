@@ -1,0 +1,32 @@
+name: Bug report
+description: Report something that doesn't work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Leave out tokens, passwords, private paths, private repository URLs and other personal data, also from logs and screenshots.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The `git push` command, the agent marker that was set, and the steps that show the problem, ideally in a disposable repository like the ones the tests create.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Commit, operating system, Git version, the agent and other `pre-push` hooks (for example Husky), and anything else that matters here.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output or logs
+      description: The output of the push, and of `git hook list pre-push`.
+      render: text
